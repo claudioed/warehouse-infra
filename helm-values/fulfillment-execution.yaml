@@ -1,0 +1,40 @@
+# fulfillment-execution — Fulfillment Execution bounded context.
+#
+# Startup: runs postgres.Migrate() before serving.
+#
+# KAFKA CAVEAT: unlike the other three, this service's INBOUND consumer
+# (WorkReleased -> CreateTask) starts unconditionally in main(), independent of
+# EVENT_PUBLISHER. There is no Kafka broker in this cluster, so the consumer
+# goroutine will log connection failures on a loop. That is cosmetic: it runs
+# in its own goroutine, the HTTP server is unaffected, and GET /healthz keeps
+# returning 200. `kafka.brokers` is pointed at a placeholder in-cluster name so
+# the failures are obviously about a missing broker rather than about the
+# binary's localhost:9092 default leaking into a pod.
+#
+# `kafka.enabled: false` still gates the OUTBOUND TaskCompleted publisher off.
+
+replicaCount: 1
+
+config:
+  httpAddr: ":8080"
+  eventPublisher: "log"
+
+kafka:
+  enabled: false
+  brokers: "kafka.warehouse-systems.svc.cluster.local:9092"
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  failureThreshold: 6
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 6

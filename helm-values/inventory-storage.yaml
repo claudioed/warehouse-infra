@@ -1,0 +1,35 @@
+# inventory-storage — Inventory & Storage bounded context.
+#
+# Startup: runs postgres.RunMigrations(DATABASE_URL, MIGRATIONS_PATH) before
+# serving, so the pod is briefly unready on a cold database. The liveness probe
+# below is relaxed accordingly (the chart default, 5s + 3 failures, can kill
+# the pod mid-migration on a slow first boot).
+#
+# Kafka: publish-only, and gated off here — EVENT_PUBLISHER=log keeps events on
+# stdout. There is no Kafka broker in this cluster.
+
+replicaCount: 1
+
+config:
+  httpAddr: ":8080"
+  eventPublisher: "log"
+  migrationsPath: "migrations"
+
+kafka:
+  enabled: false
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  failureThreshold: 6
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 6

@@ -1,0 +1,36 @@
+# workforce-management — Workforce Management bounded context.
+#
+# Startup: requireEnv("DATABASE_URL") — this binary has NO in-memory fallback
+# and log.Fatal()s without it. Its chart enforces the same thing with a
+# template-level `fail`, so a missing database.url is an install-time error
+# rather than a crash-loop. Terraform always supplies it.
+#
+# It also runs postgres.Migrate() before serving; probes are relaxed for the
+# same reason as inventory-storage.
+
+replicaCount: 1
+
+config:
+  httpAddr: ":8080"
+  eventPublisher: "log"
+  migrationsPath: "migrations"
+  maxHoursPerShift: "8.0"
+
+kafka:
+  enabled: false
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  failureThreshold: 6
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 6

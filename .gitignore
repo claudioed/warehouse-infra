@@ -1,0 +1,7 @@
+# Terraform working state — this is a local, disposable environment.
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/kubeconfig
+terraform/*.tfvars

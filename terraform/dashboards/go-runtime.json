@@ -1,0 +1,105 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "Warehouse — Go runtime & collector throughput",
+  "uid": "warehouse-go-runtime",
+  "tags": ["warehouse", "opentelemetry"],
+  "timezone": "browser",
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(service_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Goroutines",
+      "description": "go.goroutine.count from go.opentelemetry.io/contrib/instrumentation/runtime, exported over OTLP and re-published by the collector's prometheus exporter. The `or` covers both the current semconv metric name and the pre-v0.58 runtime.go.* names.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_goroutine_count{service_name=~\"$service\"} or runtime_go_goroutines{service_name=~\"$service\"}",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Go memory used",
+      "description": "go.memory.used (or the legacy runtime.go.mem.heap_alloc), split by memory type where the instrumentation reports it.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_memory_used_bytes{service_name=~\"$service\"} or runtime_go_mem_heap_alloc_bytes{service_name=~\"$service\"}",
+          "legendFormat": "{{service_name}} {{go_memory_type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Spans accepted by the collector",
+      "description": "otelcol_receiver_accepted_spans — the collector's own telemetry, scraped from :8888. Note there is no _total suffix: collector 0.158's internal Prometheus reader emits counters without the OpenMetrics suffix. If this is flat while a service is under load, the spans are not leaving the service.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (receiver) (rate(otelcol_receiver_accepted_spans{job=\"otel-collector-internal\"}[5m]))",
+          "legendFormat": "accepted {{receiver}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (receiver) (rate(otelcol_receiver_refused_spans{job=\"otel-collector-internal\"}[5m]))",
+          "legendFormat": "refused {{receiver}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Spans exported to Jaeger",
+      "description": "otelcol_exporter_sent_spans vs. send_failed (again, no _total suffix). A rising failure rate here means Jaeger is unreachable, not that the services stopped tracing.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (exporter) (rate(otelcol_exporter_sent_spans{job=\"otel-collector-internal\"}[5m]))",
+          "legendFormat": "sent {{exporter}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (exporter) (rate(otelcol_exporter_send_failed_spans{job=\"otel-collector-internal\"}[5m]))",
+          "legendFormat": "failed {{exporter}}"
+        }
+      ]
+    }
+  ]
+}

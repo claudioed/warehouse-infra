@@ -1,0 +1,37 @@
+# wes-work-planning — WES Work Planning bounded context.
+#
+# KNOWN GAP (not fixed here — this task does not touch Go source): unlike the
+# other three services, cmd/wes/main.go calls postgres.Connect(), which is a
+# bare pgxpool.New() with no migration step. Nothing creates this service's
+# schema at boot. The pod starts, stays healthy and serves GET /healthz (the
+# handler does not touch the database), but any endpoint that actually reads or
+# writes will fail until the migrations in wes-work-planning/migrations are
+# applied by hand. Applying them is a one-liner against the wes_work_planning
+# database; wiring a migrate-on-boot step belongs in the service repo, not here.
+#
+# Kafka: publish-only and gated off — EVENT_PUBLISHER=log.
+
+replicaCount: 1
+
+config:
+  httpAddr: ":8080"
+  eventPublisher: "log"
+
+kafka:
+  enabled: false
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  failureThreshold: 6
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 6
