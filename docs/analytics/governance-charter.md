@@ -32,9 +32,20 @@ warehouse, lake, or ETL team.
   ever. No synchronous cross-service calls to build a report.
 - **Separate analytics topic.** Analytics events go on `warehouse.<ctx>.analytics`,
   never on the integration topic `warehouse.<ctx>.events`. See Envelope v1.
-- **Isolated analytical store.** A **second Postgres** per service, physically
-  separate from the OLTP Postgres (own instance/database, own credentials
-  `ANALYTICS_DATABASE_URL`, own migration set). The report never contends with OLTP.
+- **Isolated analytical store.** A **separate analytical database** per service, with
+  its own credentials (`ANALYTICS_DATABASE_URL`), its own migration set, and a
+  **read-only role** for the reports binary. The report never contends with OLTP:
+  the projector is the only writer, the reports binary connects read-only, and the
+  OLTP service never opens the analytics DB at all.
+  - **Today (baseline):** a dedicated `*_analytics` database in the existing Postgres
+    release (fits `warehouse-infra/terraform/postgres.tf` + `init-databases.sql.tftpl`),
+    with a separate role. This is the required minimum — logical isolation + least
+    privilege, zero new infra.
+  - **Promotion path:** because the only coupling is the `ANALYTICS_DATABASE_URL`
+    connection string, the analytics database can be moved to a **physically separate
+    Postgres instance/release** later — when reporting load, backup cadence, or
+    blast-radius isolation justifies it — without touching application code. Design
+    to this seam now; promote when demanded (same posture as the MCP-auth OAuth seam).
 - **Three-process split, single writer.** Per service:
   - `cmd/<svc>` — OLTP (unchanged by analytics work).
   - `cmd/<svc>-projector` — the **only writer** of the analytical store. Consumes the
