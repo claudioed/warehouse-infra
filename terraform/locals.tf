@@ -101,13 +101,16 @@ locals {
   # ops-agent.tf) has no database, so it never had an analytics chart
   # either.
   #
-  # fulfillment-execution is ALSO temporarily excluded despite its chart
-  # having the same three templates as the other five: its Dockerfile never
-  # built/copied the cmd/fulfillment-projector/cmd/fulfillment-reports
-  # binaries the chart references, a real deploy gap that would
-  # CrashLoopBackOff both pods. Fix is out for review:
-  # https://github.com/claudioed/fulfillment-execution/pull/47 . Add it
-  # back here once that PR is merged.
+  # fulfillment-execution WAS temporarily excluded here (its Dockerfile
+  # never built/copied the projector/reports binaries its own chart
+  # references, a real deploy gap that would CrashLoopBackOff both pods).
+  # That fix merged 2026-08-30: https://github.com/claudioed/
+  # fulfillment-execution/pull/47. Re-included in the set below, but the
+  # NEXT `terraform apply` must not run until REPOS_ROOT/
+  # fulfillment-execution (what build-and-load.sh actually builds from)
+  # is clean -- it currently has unrelated uncommitted work on
+  # feature/gift-wrap-handling-flag that would otherwise get baked into
+  # the live image.
   #
   # Baseline per docs/analytics/governance-charter.md: a dedicated
   # `<svc>_analytics` database in the SAME Postgres release, owned by a
@@ -121,6 +124,7 @@ locals {
   # charter), not required to bring analytics live today.
   analytics_services = toset([
     "wes-work-planning",
+    "fulfillment-execution",
     "order-management",
     "inventory-storage",
     "workforce-management",

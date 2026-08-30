@@ -9,16 +9,12 @@
 #
 # `kafka.enabled: true` also turns on the OUTBOUND TaskCompleted publisher.
 #
-# Analytics: LEFT OFF here, unlike the other 5 analytics-enabled services.
-# This repo's Dockerfile had a real deploy gap -- it never built or copied
-# the cmd/fulfillment-projector/cmd/fulfillment-reports binaries the chart's
-# own projector-deployment.yaml/reports-deployment.yaml already reference,
-# so both pods would CrashLoopBackOff (exec: no such file) the moment
-# analytics.enabled flips true. Fix is out for review:
-# https://github.com/claudioed/fulfillment-execution/pull/47 . Flip this to
-# true (and add fulfillment-execution back to terraform/locals.tf's
-# analytics_services set) once that PR is merged and this checkout is
-# fast-forwarded past it.
+# Analytics: the projector+reports pair (ADR-0010) is turned on here — see
+# wes-work-planning.yaml's comment for the full rationale. This was
+# temporarily left off (Dockerfile deploy gap, PR #47) and re-enabled once
+# that fix merged 2026-08-30 -- see terraform/locals.tf's analytics_services
+# comment for the important caveat about REPOS_ROOT/fulfillment-execution
+# needing to be a clean checkout before the next terraform apply.
 
 replicaCount: 1
 
@@ -29,6 +25,9 @@ config:
 kafka:
   enabled: true
   brokers: "kafka.warehouse-systems.svc.cluster.local:9092"
+
+analytics:
+  enabled: true
 
 livenessProbe:
   httpGet:
