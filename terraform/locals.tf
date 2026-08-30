@@ -45,6 +45,27 @@ locals {
       path       = "/fulfillment-execution"
       chart_path = "${path.module}/../../fulfillment-execution/charts/fulfillment-execution"
     }
+    "order-management" = {
+      db         = "order_management"
+      user       = "order_management"
+      port       = 8080
+      path       = "/order-management"
+      chart_path = "${path.module}/../../order-management/charts/order-management"
+    }
+    "facility-layout" = {
+      db         = "facility_layout"
+      user       = "facility_layout"
+      port       = 8080
+      path       = "/facility-layout"
+      chart_path = "${path.module}/../../facility-layout/charts/facility-layout"
+    }
+    "labor-performance" = {
+      db         = "labor_performance"
+      user       = "labor_performance"
+      port       = 8080
+      path       = "/labor-performance"
+      chart_path = "${path.module}/../../labor-performance/charts/labor-performance"
+    }
   }
 
   # Per-service database passwords are GENERATED, never committed. Each service
@@ -67,6 +88,61 @@ locals {
   database_urls = {
     for name, svc in local.services :
     name => "postgres://${svc.user}:${local.service_passwords[name]}@${local.postgres_host}:${local.postgres_port}/${svc.db}?sslmode=disable"
+  }
+
+  # ---------------------------------------------------------------------
+  # Analytics data-mesh (ADR-0010 in each service repo): the "report part"
+  # (cmd/<svc>-projector, cmd/<svc>-reports) alongside the six services
+  # whose charts ship the projector-deployment.yaml/reports-deployment.yaml/
+  # analytics-secret.yaml templates. labor-performance is deliberately
+  # excluded — it is a pure Kafka consumer with no analytics chart of its
+  # own (see warehouse-systems-fleet-ops skill's kubernetes-deployment.md
+  # audit note); warehouse-ops-agent (not in local.services at all — see
+  # ops-agent.tf) has no database, so it never had an analytics chart
+  # either.
+  #
+  # fulfillment-execution is ALSO temporarily excluded despite its chart
+  # having the same three templates as the other five: its Dockerfile never
+  # built/copied the cmd/fulfillment-projector/cmd/fulfillment-reports
+  # binaries the chart references, a real deploy gap that would
+  # CrashLoopBackOff both pods. Fix is out for review:
+  # https://github.com/claudioed/fulfillment-execution/pull/47 . Add it
+  # back here once that PR is merged.
+  #
+  # Baseline per docs/analytics/governance-charter.md: a dedicated
+  # `<svc>_analytics` database in the SAME Postgres release, owned by a
+  # single generated role. The chart's own `analytics.database.reportsUrl`
+  # falls back to `projectorUrl` when left empty (see each chart's
+  # values.yaml comment) — matching the "local/dev" baseline the charts
+  # already document, same posture as this file's single-role OLTP
+  # database_urls above (no separate read-only role there either). The
+  # promotion path to a distinct read-only reports role / a physically
+  # separate instance is a later, additive change (see the governance
+  # charter), not required to bring analytics live today.
+  analytics_services = toset([
+    "wes-work-planning",
+    "order-management",
+    "inventory-storage",
+    "workforce-management",
+    "facility-layout",
+  ])
+
+  analytics_db_info = {
+    for name in local.analytics_services :
+    name => {
+      db   = "${local.services[name].db}_analytics"
+      user = "${local.services[name].user}_analytics"
+    }
+  }
+
+  analytics_service_passwords = {
+    for name in local.analytics_services :
+    name => random_password.service_analytics_db[name].result
+  }
+
+  analytics_database_urls = {
+    for name in local.analytics_services :
+    name => "postgres://${local.analytics_db_info[name].user}:${local.analytics_service_passwords[name]}@${local.postgres_host}:${local.postgres_port}/${local.analytics_db_info[name].db}?sslmode=disable"
   }
 }
 
