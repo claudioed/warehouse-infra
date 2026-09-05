@@ -1,23 +1,46 @@
 # ---------------------------------------------------------------------------
-# Gateway API — pilot phase.
+# Gateway API — Kong fronts every service via HTTPRoute.
 #
-# Kong currently fronts every service via plain Kubernetes `Ingress` objects
-# (see kong.tf's header comment on that original choice). This introduces
-# the Kubernetes Gateway API as an ADDITIVE, parallel routing mechanism:
-# Kong's own Ingress Controller (KIC) ships both an Ingress reconciler and a
-# Gateway API reconciler ENABLED BY DEFAULT in the same process (verified
-# against the real `kong/kubernetes-ingress-controller:3.5` image — both
-# `--enable-controller-ingress-class-networkingv1` and
-# `--enable-controller-gwapi-httproute` default to true), so a service can
-# move from Ingress to HTTPRoute without a fleet-wide flag day and without
-# any other service's routing changing underneath it.
+# Kong originally fronted every service via plain Kubernetes `Ingress`
+# objects (see kong.tf's header comment on that original choice). This
+# migrates every service in local.services (plus warehouse-ops-agent, see
+# ops-agent.tf) from Ingress to the Kubernetes Gateway API's HTTPRoute,
+# chart-rendered via each service's own `gatewayApi` values block --
+# services.tf and ops-agent.tf compute those values the same way they
+# already computed `ingress`.
 #
-# PILOT SCOPE: this phase stands up the Gateway API platform pieces (CRDs,
-# GatewayClass, Gateway) and migrates exactly ONE service
-# (fulfillment-execution, the fleet's existing reference implementation) to
-# HTTPRoute, as a real end-to-end validation before touching the other six.
-# The remaining six services keep their existing Ingress objects untouched
-# — see services.tf's `ingress` block, which still applies to them.
+# HISTORY (kept because the root cause below is easy to re-trip on a future
+# Kong/KIC upgrade): this started as a single-service pilot on
+# fulfillment-execution using a raw kubectl-applied HTTPRoute, because none
+# of the eight services' charts had an httproute.yaml template yet. That
+# pilot hit a real bug (or so it looked) in Kong Ingress Controller 3.5:
+# the `Gateway` controller appeared to silently stop reconciling after one
+# pass at startup -- confirmed via `kubectl patch --subresource=status`
+# sitting untouched for 10+ minutes, reproduced across KIC 3.5 and 3.5.13,
+# and reproduced again after switching to the `gatewayDiscovery`
+# split-release Helm topology. It turned out not to be a bug: `GatewayClass`
+# objects require the annotation `konghq.com/gatewayclass-unmanaged: "true"`
+# to be reconciled at all when Kong's dataplane is deployed via
+# `deployment.kong.enabled=true` (this fleet's setup, and the setup used by
+# the vast majority of self-managed Kong-on-Kubernetes deployments) rather
+# than provisioned dynamically per-Gateway by KIC/Kong Gateway Operator --
+# an "unmanaged" gateway in KIC's own terminology. Without the annotation,
+# KIC's Gateway controller has no code path at all for that topology and
+# goes idle after one pass, with zero error or log line pointing at the
+# missing annotation. Found by reading KIC's own CHANGELOG.md for prior
+# fixes mentioning "GatewayReconciler falls into a loop" and "unmanaged
+# Gateway mode", not by guessing. With the annotation (see
+# null_resource.gateway_class below), a Gateway immediately reaches
+# `Accepted: True` / `Programmed: True` with the message "this unmanaged
+# gateway has been picked up by the controller and will be processed", and
+# a curl through a resulting HTTPRoute on a path that only existed via that
+# route (not any Ingress) returned a real 200 -- verified live, then again
+# via a full Terraform destroy/apply rebuild before trusting it. Once that
+# fix was confirmed, the same `httproute.yaml` chart template pattern was
+# fanned out to the other 7 services (each repo's own PR, independently
+# verified: helm lint, a real enabled-render, a real default-is-a-no-op
+# render, and CI green) so every service could migrate the same way
+# fulfillment-execution did, without a fleet-wide flag day.
 #
 # Why not the `kubernetes_manifest` provider resource for the CRDs
 # themselves: it needs the CRD's OpenAPI schema to validate the resource at
@@ -174,74 +197,6 @@ resource "null_resource" "gateway" {
 
 locals {
   gateway_name = "warehouse-gateway"
-}
-
-# ---------------------------------------------------------------------------
-# The pilot HTTPRoute: fulfillment-execution only (see services.tf's
-# local.gateway_api_pilot_services). Mirrors exactly what its Ingress
-# object would have expressed -- same path prefix, same strip-prefix
-# behavior -- via HTTPRoute's own `filters` block, so this is a like-for-
-# like routing swap, not a behavior change. Kong's KIC reconciles this the
-# same way it reconciles the other six services' Ingress objects: attach
-# via `parentRefs` to the shared Gateway (not a per-service Gateway), Kong
-# programs the matching route into the running proxy.
-#
-# Applied directly here (not via the service's own Helm chart) because
-# none of the seven charts ship an httproute.yaml template yet -- see the
-# comment on gateway_api_pilot_services for why that fan-out is deferred
-# until this pilot proves the pattern end to end.
-# ---------------------------------------------------------------------------
-
-resource "null_resource" "fulfillment_execution_httproute" {
-  count = var.deploy_gateway_api && var.deploy_services && contains(local.gateway_api_pilot_services, "fulfillment-execution") ? 1 : 0
-
-  depends_on = [
-    null_resource.gateway,
-    helm_release.service,
-  ]
-
-  triggers = {
-    cluster_id = kind_cluster.warehouse.id
-    kubeconfig = local.kubeconfig_path
-    namespace  = var.apps_namespace
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      cat <<'MANIFEST' | kubectl --kubeconfig '${local.kubeconfig_path}' apply -f -
-      apiVersion: gateway.networking.k8s.io/v1
-      kind: HTTPRoute
-      metadata:
-        name: fulfillment-execution
-        namespace: ${var.apps_namespace}
-      spec:
-        parentRefs:
-          - name: ${local.gateway_name}
-            namespace: ${var.kong_namespace}
-            sectionName: http
-        rules:
-          - matches:
-              - path:
-                  type: PathPrefix
-                  value: ${local.services["fulfillment-execution"].path}
-            filters:
-              - type: URLRewrite
-                urlRewrite:
-                  path:
-                    type: ReplacePrefixMatch
-                    replacePrefixMatch: /
-            backendRefs:
-              - name: fulfillment-execution
-                port: 80
-      MANIFEST
-    EOT
-  }
-
-  # See gateway_api_crds' destroy provisioner comment.
-  provisioner "local-exec" {
-    when    = destroy
-    command = "kubectl --kubeconfig '${self.triggers.kubeconfig}' delete httproute fulfillment-execution -n '${self.triggers.namespace}' --ignore-not-found=true || true"
-  }
 }
 
 output "gateway_api_installed" {
