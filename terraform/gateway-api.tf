@@ -72,6 +72,26 @@ resource "null_resource" "gateway_api_crds" {
 # declaration. controllerName is Kong KIC's own default
 # (`konghq.com/kic-gateway-controller`, matched exactly against the real
 # binary's --gateway-api-controller-name flag default, not guessed).
+#
+# The `konghq.com/gatewayclass-unmanaged: "true"` annotation is REQUIRED
+# and is the actual fix for a real bug this pilot spent a long time
+# isolating: without it, KIC's `Gateway` controller silently processes a
+# Gateway object exactly once at controller startup and then NEVER
+# reconciles it again (confirmed via `kubectl patch --subresource=status`
+# sitting untouched for 10+ minutes; reproduced across KIC 3.5 and 3.5.13;
+# reproduced even after switching to the gatewayDiscovery split-release
+# topology). Root cause: this deployment runs Kong's dataplane via
+# `deployment.kong.enabled=true` in the same/adjacent Helm release
+# (i.e. "unmanaged" from KIC's perspective -- KIC does not itself
+# provision the Gateway's dataplane pods the way Kong Gateway Operator
+# would). KIC's Gateway controller has a genuinely different code path
+# for that topology, gated behind this annotation, that was never
+# exercised without it. With the annotation present, the Gateway
+# immediately reaches `Accepted: True` / `Programmed: True` with the
+# message "this unmanaged gateway has been picked up by the controller
+# and will be processed" -- verified live, along with a real end-to-end
+# curl through a resulting HTTPRoute returning 200 on a path that only
+# exists via that route (not the pre-existing Ingress).
 resource "null_resource" "gateway_class" {
   count = var.deploy_gateway_api ? 1 : 0
 
@@ -92,6 +112,8 @@ resource "null_resource" "gateway_class" {
       kind: GatewayClass
       metadata:
         name: kong
+        annotations:
+          konghq.com/gatewayclass-unmanaged: "true"
       spec:
         controllerName: konghq.com/kic-gateway-controller
       MANIFEST

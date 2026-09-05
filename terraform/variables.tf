@@ -466,27 +466,28 @@ variable "deploy_gateway_api" {
     installs unconditionally either way, this only adds the Gateway API
     platform pieces on top.
 
-    Defaults to FALSE. The pilot (fulfillment-execution migrated to
-    HTTPRoute) hit a real, reproducible bug in Kong Ingress Controller
-    3.5's Gateway reconciler: it processes a Gateway object exactly once
-    at controller startup, logs through "Checking deletion timestamp",
-    and then never reconciles it again -- confirmed by manually patching
-    the Gateway's status subresource directly and watching it sit
-    untouched for 10+ minutes, which rules out RBAC/CRDs/webhooks/leader
-    election (all independently verified fine) and leaves only KIC's own
-    Gateway controller as the fault. Reproduced identically on KIC 3.5 and
-    the latest 3.5.13 patch, so it is not a stale-image issue. Functional
-    consequence: HTTPRoute traffic 404s ("no Route matched") while the
-    same service's old Ingress route works. Left in the codebase
-    (defaulted off) rather than deleted, since the platform pieces
-    (CRDs/GatewayClass/Gateway resources, the HTTPRoute shape) are all
-    otherwise correct and ready to re-enable once either a KIC fix ships
-    or this repo moves to `ingressController.gatewayDiscovery.enabled=true`
-    (a bigger topology change, splitting Kong Gateway and KIC into
-    separate releases per the chart's own docs) as a workaround.
+    RESOLVED: an earlier iteration of this pilot found KIC 3.5's `Gateway`
+    controller appearing to silently stop reconciling after one pass at
+    startup, reproduced across two KIC patch versions and two Helm
+    deployment topologies (single-release and gatewayDiscovery
+    split-release). Root cause turned out to be a real, documented KIC
+    behavior, not a bug: `GatewayClass` objects require the
+    `konghq.com/gatewayclass-unmanaged: "true"` annotation to be
+    reconciled when Kong's dataplane is deployed via
+    `deployment.kong.enabled=true` rather than provisioned dynamically by
+    KIC/Kong Gateway Operator per-Gateway (an "unmanaged" gateway in KIC's
+    terminology -- exactly this fleet's topology). Without the
+    annotation, the `Gateway` controller has no code path to follow and
+    goes idle after its first pass. With it, the Gateway immediately
+    reaches `Accepted: True` / `Programmed: True`
+    ("this unmanaged gateway has been picked up by the controller and
+    will be processed"), and a real end-to-end curl through a resulting
+    HTTPRoute on a path that only exists via that route (not the
+    pre-existing Ingress) returned 200. See gateway-api.tf's GatewayClass
+    comment for the full verification trail.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "gateway_api_version" {
