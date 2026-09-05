@@ -444,41 +444,6 @@ variable "kiali_chart_version" {
 }
 
 # ---------------------------------------------------------------------------
-# Logging — Loki + Alloy (see logging.tf for the full rationale).
-# ---------------------------------------------------------------------------
-
-variable "deploy_logging" {
-  description = <<-EOT
-    Whether to install Loki + Alloy (logging.tf). Independent of
-    deploy_observability's other components so `-var=deploy_logging=false`
-    can drop just the log stack while keeping traces/metrics, but gated
-    behind deploy_observability too since logging without the rest of the
-    observability namespace makes no sense on its own.
-  EOT
-  type        = bool
-  default     = true
-}
-
-variable "loki_chart_version" {
-  description = <<-EOT
-    grafana/loki chart version, resolved with `helm search repo grafana/loki
-    --versions` against https://grafana.github.io/helm-charts.
-  EOT
-  type        = string
-  default     = "7.3.0"
-}
-
-variable "alloy_chart_version" {
-  description = <<-EOT
-    grafana/alloy chart version, resolved with `helm search repo
-    grafana/alloy --versions` against https://grafana.github.io/helm-charts.
-    Alloy (not Promtail) is Grafana Labs' current log-collection agent;
-    Promtail is in long-term support only.
-  EOT
-  type        = string
-  default     = "1.12.1"
-}
-
 variable "loki_retention_period" {
   description = <<-EOT
     How long Loki keeps ingested logs before its compactor deletes them.
@@ -490,3 +455,46 @@ variable "loki_retention_period" {
   default     = "24h"
 }
 
+# ---------------------------------------------------------------------------
+# Gateway API — pilot phase (see gateway-api.tf and kong.tf's header).
+# ---------------------------------------------------------------------------
+
+variable "deploy_gateway_api" {
+  description = <<-EOT
+    Whether to install the Gateway API CRDs, GatewayClass, and the shared
+    Gateway (gateway-api.tf). Independent of Kong's own deployment: Kong
+    installs unconditionally either way, this only adds the Gateway API
+    platform pieces on top.
+
+    Defaults to FALSE. The pilot (fulfillment-execution migrated to
+    HTTPRoute) hit a real, reproducible bug in Kong Ingress Controller
+    3.5's Gateway reconciler: it processes a Gateway object exactly once
+    at controller startup, logs through "Checking deletion timestamp",
+    and then never reconciles it again -- confirmed by manually patching
+    the Gateway's status subresource directly and watching it sit
+    untouched for 10+ minutes, which rules out RBAC/CRDs/webhooks/leader
+    election (all independently verified fine) and leaves only KIC's own
+    Gateway controller as the fault. Reproduced identically on KIC 3.5 and
+    the latest 3.5.13 patch, so it is not a stale-image issue. Functional
+    consequence: HTTPRoute traffic 404s ("no Route matched") while the
+    same service's old Ingress route works. Left in the codebase
+    (defaulted off) rather than deleted, since the platform pieces
+    (CRDs/GatewayClass/Gateway resources, the HTTPRoute shape) are all
+    otherwise correct and ready to re-enable once either a KIC fix ships
+    or this repo moves to `ingressController.gatewayDiscovery.enabled=true`
+    (a bigger topology change, splitting Kong Gateway and KIC into
+    separate releases per the chart's own docs) as a workaround.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_api_version" {
+  description = <<-EOT
+    kubernetes-sigs/gateway-api release tag for the standard-channel CRD
+    bundle, resolved from
+    https://github.com/kubernetes-sigs/gateway-api/releases/latest.
+  EOT
+  type        = string
+  default     = "v1.6.2"
+}

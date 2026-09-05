@@ -26,7 +26,19 @@ locals {
       ],
     )))
   }
+
+  # Gateway API pilot (gateway-api.tf): exactly one service migrates from
+  # Ingress to HTTPRoute first, as a real end-to-end validation before the
+  # other six. A service in this set gets NO `ingress` block in its Helm
+  # values below (Kong would otherwise route the same path twice, once via
+  # each mechanism) and instead gets an HTTPRoute applied directly by
+  # gateway-api.tf's null_resource, since none of the seven services' own
+  # charts ship an httproute.yaml template yet — adding that template to a
+  # chart is exactly the fan-out this pilot exists to de-risk before doing
+  # it six more times.
+  gateway_api_pilot_services = var.deploy_gateway_api ? toset(["fulfillment-execution"]) : toset([])
 }
+
 
 resource "null_resource" "build_and_load" {
   for_each = var.deploy_services ? local.services : {}
@@ -88,13 +100,19 @@ resource "helm_release" "service" {
           url = local.database_urls[each.key]
         }
 
-        # Kong route. `host: ""` makes the rule host-agnostic, so it matches
+        # Kong route. `host: "" ` makes the rule host-agnostic, so it matches
         # requests to http://localhost/<prefix> regardless of the Host header.
         # konghq.com/strip-path drops the /<service> prefix before proxying, so
         # the pod still sees the paths its router actually registers
         # (GET /healthz, not GET /inventory-storage/healthz).
+        #
+        # The Gateway API pilot service gets NO Ingress at all (see
+        # local.gateway_api_pilot_services above) -- its routing is an
+        # HTTPRoute applied by gateway-api.tf instead, so this block is
+        # entirely skipped for it rather than disabled-but-present, which
+        # would otherwise still create a Kong route object nothing removes.
         ingress = {
-          enabled   = true
+          enabled   = !contains(local.gateway_api_pilot_services, each.key)
           className = "kong"
           annotations = {
             "konghq.com/strip-path" = "true"
