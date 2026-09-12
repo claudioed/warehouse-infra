@@ -359,6 +359,42 @@ locals {
       } : {}
     )
   }
+
+  # ---------------------------------------------------------------------
+  # Full per-service values, static file + computed layer PRE-MERGED into
+  # one object. helm_release.service (above) doesn't need this -- Helm's
+  # own engine deep-merges the `values = [file(...), yamlencode(...)]`
+  # list at install/upgrade time. ArgoCD's Application `helm.valuesObject`
+  # (argocd-apps.tf) accepts only ONE values object per source, so this is
+  # the one place that merge has to happen ahead of time, in Terraform.
+  #
+  # A plain top-level `merge()` (computed wins) is correct for every key
+  # EXCEPT the two that appear in BOTH layers with nested sub-keys neither
+  # side fully owns: `config` (static sets httpAddr/eventPublisher; the
+  # computed layer conditionally ALSO sets eventPublisher for
+  # process-path-management/facility-layout's Kafka-source flags) and
+  # `analytics` (static sets `enabled: true`; the computed layer adds
+  # `database.projectorUrl/reportsUrl` alongside it). Those two get an
+  # explicit nested merge so neither layer's keys are silently dropped --
+  # verified against every chart's helm-values file: no other top-level
+  # key is set by both layers (see the ArgoCD rollout plan's Phase 4 audit).
+  # ---------------------------------------------------------------------
+  static_helm_values = {
+    for name, svc in local.services :
+    name => yamldecode(file("${path.module}/../helm-values/${name}.yaml"))
+  }
+
+  service_full_values = {
+    for name, svc in local.services :
+    name => merge(
+      local.static_helm_values[name],
+      local.service_helm_values[name],
+      {
+        config    = merge(lookup(local.static_helm_values[name], "config", {}), lookup(local.service_helm_values[name], "config", {}))
+        analytics = merge(lookup(local.static_helm_values[name], "analytics", {}), lookup(local.service_helm_values[name], "analytics", {}))
+      }
+    )
+  }
 }
 
 # ---------------------------------------------------------------------------
