@@ -37,6 +37,18 @@ locals {
   # mechanism) and instead gets `gatewayApi.enabled=true` with the shared
   # Gateway as its parentRef.
   gateway_api_pilot_services = var.deploy_gateway_api ? toset(keys(local.services)) : toset([])
+
+  # Content-derived image tag (ArgoCD rollout, Task 6). `var.image_tag`
+  # ("local", fixed) previously left a rebuilt image's pod spec
+  # byte-identical, which is exactly the documented "rebuilt image alone
+  # does not roll a running Deployment" pitfall -- and under ArgoCD it is
+  # no longer just an inconvenience: Argo's diffing IS what triggers a
+  # sync, so a tag that never changes gives Argo nothing to detect on a
+  # rebuild. Mirrors local.frontend_source_hash's existing pattern exactly.
+  service_image_tags = {
+    for name, hash in local.service_source_hash :
+    name => "local-${substr(hash, 0, 12)}"
+  }
 }
 
 
@@ -47,12 +59,12 @@ resource "null_resource" "build_and_load" {
 
   triggers = {
     source_hash = local.service_source_hash[each.key]
-    image       = "warehouse/${each.key}:${var.image_tag}"
+    image       = "warehouse/${each.key}:${local.service_image_tags[each.key]}"
     cluster     = var.cluster_name
   }
 
   provisioner "local-exec" {
-    command = "${path.module}/../scripts/build-and-load.sh '${each.key}' '${var.image_tag}' '${var.cluster_name}'"
+    command = "${path.module}/../scripts/build-and-load.sh '${each.key}' '${local.service_image_tags[each.key]}' '${var.cluster_name}'"
   }
 }
 
@@ -111,7 +123,7 @@ locals {
       {
         image = {
           repository = "warehouse/${name}"
-          tag        = var.image_tag
+          tag        = local.service_image_tags[name]
           # The image only ever exists in the kind nodes' containerd store, put
           # there by `kind load docker-image`. IfNotPresent stops the kubelet
           # trying to pull it from Docker Hub and ImagePullBackOff-ing.
