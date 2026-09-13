@@ -68,39 +68,18 @@ resource "null_resource" "build_and_load" {
   }
 }
 
-resource "helm_release" "service" {
-  for_each = var.deploy_services ? local.services : {}
-
-  depends_on = [
-    kubernetes_namespace.apps,
-    helm_release.postgresql,
-    helm_release.kong,
-    null_resource.build_and_load,
-    # The frontend image has to be in the kind node's containerd store before
-    # this release renders a pod referencing it, or the frontend pod lands in
-    # ImagePullBackOff (pullPolicy is IfNotPresent, and nothing publishes
-    # these images to a registry).
-    null_resource.build_and_load_frontend,
-  ]
-
-  name      = each.key
-  chart     = each.value.chart_path
-  namespace = var.apps_namespace
-
-  timeout = 600
-  wait    = true
-
-  values = [
-    # Static, human-editable environment config.
-    file("${path.module}/../helm-values/${each.key}.yaml"),
-
-    # Computed config. Appended last so it takes precedence. Extracted into
-    # local.service_helm_values (below) so the ArgoCD Application resources
-    # in argocd-apps.tf compute IDENTICAL values from the SAME source,
-    # instead of re-deriving this logic a second time.
-    yamlencode(local.service_helm_values[each.key]),
-  ]
-}
+# ---------------------------------------------------------------------------
+# NOTE: there is deliberately NO `helm_release.service` resource here
+# anymore. ArgoCD (argocd-apps.tf's `kubectl_manifest.application`, one per
+# service) is now the SOLE owner of these 8 Helm releases' lifecycle --
+# removed from Terraform state via `terraform state rm` on 2026-09-12 after
+# verifying every Application was already Synced/Healthy (never a `helm
+# uninstall`; the running release was simply handed off). Re-adding a
+# `helm_release.service` resource here would fight ArgoCD for ownership of
+# the exact same release name+namespace. `null_resource.build_and_load`
+# above still builds and side-loads each service's image -- that part of
+# the supply chain is unrelated to which controller applies the chart.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # The full computed Helm values per service — extracted from helm_release.
