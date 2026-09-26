@@ -23,49 +23,30 @@
 # not here. The chart itself refuses to render a non-stub mode without
 # credentials rather than producing a pod that dies with
 # CreateContainerConfigError (see its tests/test_credential_wiring.py).
+#
+# DECIDED 2026-09-26: no local build. This repo's `docker-publish` CI job
+# publishes to GHCR (ghcr.io/claudioed/network-fulfillment), including a
+# `:latest` tag on every merge to main -- pulled straight from there now,
+# same as services.tf.
 # ---------------------------------------------------------------------------
 
 locals {
   network_fulfillment_chart_path = "${path.module}/../../network-fulfillment/charts/network-fulfillment"
-
-  network_fulfillment_source_hash = sha256(join("", concat(
-    [for f in sort(fileset("${path.module}/../../network-fulfillment", "**/*.go")) : filesha256("${path.module}/../../network-fulfillment/${f}")],
-    [
-      filesha256("${path.module}/../../network-fulfillment/Dockerfile"),
-      filesha256("${path.module}/../../network-fulfillment/go.mod"),
-      filesha256("${path.module}/../../network-fulfillment/go.sum"),
-    ],
-  )))
-}
-
-resource "null_resource" "build_and_load_network_fulfillment" {
-  count = var.deploy_services ? 1 : 0
-
-  depends_on = [kind_cluster.warehouse]
-
-  triggers = {
-    source_hash = local.network_fulfillment_source_hash
-    image       = "warehouse/network-fulfillment:${local.network_fulfillment_image_tag}"
-    cluster     = var.cluster_name
-  }
-
-  provisioner "local-exec" {
-    command = "${path.module}/../scripts/build-and-load.sh 'network-fulfillment' '${local.network_fulfillment_image_tag}' '${var.cluster_name}'"
-  }
 }
 
 locals {
-  # Content-derived, same rationale as services.tf's local.service_image_tags:
-  # ArgoCD's sync only fires on an actual diff, so a fixed tag gives it
-  # nothing to detect on a rebuild.
-  network_fulfillment_image_tag = "local-${substr(local.network_fulfillment_source_hash, 0, 12)}"
+  # `:latest` -- this repo's docker-publish CI job pushes it on every merge
+  # to main. See this file's header re: no local build.
+  network_fulfillment_image_tag = "latest"
 
   network_fulfillment_helm_values = merge(
     {
       image = {
-        repository = "warehouse/network-fulfillment"
+        repository = "ghcr.io/claudioed/network-fulfillment"
         tag        = local.network_fulfillment_image_tag
-        pullPolicy = "IfNotPresent"
+        # Always, not IfNotPresent: :latest only tracks the newest published
+        # image if the kubelet re-pulls it every time.
+        pullPolicy = "Always"
       }
 
       service = {
