@@ -479,8 +479,9 @@ gets its own single, explicitly-named `kubectl_manifest` resource instead;
 see `ops-agent.tf`'s `local.ops_agent_helm_values` and `frontends.tf`'s
 `local.console_helm_values`.) A `terraform apply` after adding an entry:
 
-1. Builds and side-loads the new service's image
-   (`null_resource.build_and_load`, unchanged from before).
+1. Pulls the new service's already-published image from its own repo's
+   registry (no local build; `image.repository`/`image.tag` computed in
+   `services.tf`'s `local.service_helm_values`).
 2. Creates its `<service>-db` Secret directly
    (`kubernetes_secret.service_db` in `postgres.tf`) — no chart ever sees a
    plaintext `DATABASE_URL` value through an ArgoCD `Application`'s
@@ -517,14 +518,18 @@ Local admin access is `kubectl port-forward` only, same as above.
 `terraform apply`, and `prune: true` deletes both the `Application` and the
 Helm release it owned — no orphaned resources left behind.
 
-**Image tags are content-derived**, not the fixed `"local"` value from
-before this GitOps rollout: `local.service_image_tags[name]` hashes each
-service's Go source/migrations/Dockerfile/go.mod/go.sum (mirroring the
-existing `service_source_hash`). This is required, not cosmetic — ArgoCD's
-sync only fires on an actual diff, and a tag that never changes on rebuild
-gives it nothing to detect. This also happens to fix the older
-"rebuilt image alone does not roll a running Deployment" pitfall documented
-below, as a side effect.
+**Image tags are `:latest` pulled straight from each service's own registry**
+(GHCR for order-management/warehouse-ops-agent/network-fulfillment, Docker
+Hub for the rest) with `pullPolicy: Always`, not a locally-built image at
+all (decided 2026-09-26 — the earlier content-derived-local-tag scheme,
+`local.service_image_tags[name]` hashing Go source/migrations/Dockerfile/
+go.mod/go.sum into a `local-<hash>` tag, is retired for backend services).
+Every backend repo's `docker-publish` CI job already republishes `:latest`
+on every merge to main, so ArgoCD's `Application` sees a real, live image
+without warehouse-infra ever running `docker build` for a backend service.
+`pullPolicy: Always` is required for this to work, not cosmetic — it is
+what makes the kubelet actually re-pull `:latest` instead of caching
+whatever it first resolved to.
 
 ---
 
@@ -617,7 +622,9 @@ warehouse-infra/
 ├── scripts/
 │   ├── up.sh                    # single entrypoint: init + apply + next steps
 │   ├── down.sh                  # destroy + fallback cluster delete
-│   ├── build-and-load.sh        # docker build + kind load, called by Terraform
+│   ├── build-and-load-frontend.sh  # docker build + kind load for MFEs/console
+│                                    # (frontends still build locally; backends
+│                                    #  pull from GHCR/Docker Hub, no build step)
 │   └── smoke-test.sh            # curls all four /healthz through Kong
 └── terraform/
     ├── versions.tf              # Terraform + provider pins

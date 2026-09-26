@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# The four bounded-context services.
+# The eight bounded-context services.
 #
 # Each is installed from the Helm chart that already ships in its OWN repo
 # (see locals.tf `chart_path`). warehouse-infra contributes only the
@@ -7,26 +7,23 @@
 # bits, plus the values computed here (image tag, database URL, Kong route).
 # Terraform-computed values are appended last, so they win over the file.
 #
-# Images are built and side-loaded into kind rather than pushed to a registry;
-# `docker build` + `kind load docker-image` is the whole supply chain. The
-# hash below re-triggers that build whenever Go source, migrations, the
-# Dockerfile or the module files change.
+# DECIDED 2026-09-26: no local image builds anywhere in this deploy path.
+# Every image is pulled from the registry that service's own repo's CI
+# (`docker-publish`, main-branch-only) already publishes to -- never built
+# on the operator's machine and never side-loaded into kind. The previous
+# `docker build` + `kind load docker-image` supply chain
+# (`null_resource.build_and_load`, `scripts/build-and-load.sh`,
+# `service_source_hash`/content-addressed `service_image_tags`) is REMOVED.
+# `:latest` + `pullPolicy: Always` is the chosen tracking mechanism -- every
+# backend repo's `docker-publish` job already pushes `:latest` on merge to
+# main, so this needs no CI change anywhere. Two registries are in play:
+# order-management/warehouse-ops-agent/network-fulfillment publish to GHCR;
+# the other six services publish to Docker Hub. Do not reintroduce a local
+# build for any service added here later -- flag it back to the user
+# instead of assuming it is acceptable.
 # ---------------------------------------------------------------------------
 
 locals {
-  service_source_hash = {
-    for name, svc in local.services :
-    name => sha256(join("", concat(
-      [for f in sort(fileset("${path.module}/../../${name}", "**/*.go")) : filesha256("${path.module}/../../${name}/${f}")],
-      [for f in sort(fileset("${path.module}/../../${name}", "migrations/**")) : filesha256("${path.module}/../../${name}/${f}")],
-      [
-        filesha256("${path.module}/../../${name}/Dockerfile"),
-        filesha256("${path.module}/../../${name}/go.mod"),
-        filesha256("${path.module}/../../${name}/go.sum"),
-      ],
-    )))
-  }
-
   # Gateway API (gateway-api.tf): every service in local.services now
   # migrates from Ingress to HTTPRoute, chart-rendered via each service's
   # own `gatewayApi` values block (added to all 7 charts in the fan-out
@@ -38,33 +35,24 @@ locals {
   # Gateway as its parentRef.
   gateway_api_pilot_services = var.deploy_gateway_api ? toset(keys(local.services)) : toset([])
 
-  # Content-derived image tag (ArgoCD rollout, Task 6). `var.image_tag`
-  # ("local", fixed) previously left a rebuilt image's pod spec
-  # byte-identical, which is exactly the documented "rebuilt image alone
-  # does not roll a running Deployment" pitfall -- and under ArgoCD it is
-  # no longer just an inconvenience: Argo's diffing IS what triggers a
-  # sync, so a tag that never changes gives Argo nothing to detect on a
-  # rebuild. Mirrors local.frontend_source_hash's existing pattern exactly.
+  # Which registry each service's own CI `docker-publish` job pushes to.
+  # Verified against each repo's `.github/workflows/ci.yml` 2026-09-26:
+  # order-management publishes to GHCR; the other seven services here
+  # publish to Docker Hub (bare `claudioed/<repo>`, no registry host --
+  # Docker resolves an unprefixed repository to docker.io by default).
+  service_image_registries = {
+    "order-management" = "ghcr.io/claudioed"
+  }
+
+  # `:latest` is always the most recently published main-branch image --
+  # every backend repo's `docker-publish` job pushes it on every merge to
+  # main. `pullPolicy: Always` (below) is required for this to actually
+  # track: without it the kubelet only pulls once per tag it has never
+  # seen, so `:latest` would silently keep serving whatever it first
+  # resolved to.
   service_image_tags = {
-    for name, hash in local.service_source_hash :
-    name => "local-${substr(hash, 0, 12)}"
-  }
-}
-
-
-resource "null_resource" "build_and_load" {
-  for_each = var.deploy_services ? local.services : {}
-
-  depends_on = [kind_cluster.warehouse]
-
-  triggers = {
-    source_hash = local.service_source_hash[each.key]
-    image       = "warehouse/${each.key}:${local.service_image_tags[each.key]}"
-    cluster     = var.cluster_name
-  }
-
-  provisioner "local-exec" {
-    command = "${path.module}/../scripts/build-and-load.sh '${each.key}' '${local.service_image_tags[each.key]}' '${var.cluster_name}'"
+    for name, svc in local.services :
+    name => "latest"
   }
 }
 
@@ -76,9 +64,9 @@ resource "null_resource" "build_and_load" {
 # verifying every Application was already Synced/Healthy (never a `helm
 # uninstall`; the running release was simply handed off). Re-adding a
 # `helm_release.service` resource here would fight ArgoCD for ownership of
-# the exact same release name+namespace. `null_resource.build_and_load`
-# above still builds and side-loads each service's image -- that part of
-# the supply chain is unrelated to which controller applies the chart.
+# the exact same release name+namespace. Each service's image now comes
+# straight from its published registry tag (see this file's header) -- there
+# is no local build/load step in this supply chain any more.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -101,12 +89,12 @@ locals {
     name => merge(
       {
         image = {
-          repository = "warehouse/${name}"
+          repository = "${lookup(local.service_image_registries, name, "claudioed")}/${name}"
           tag        = local.service_image_tags[name]
-          # The image only ever exists in the kind nodes' containerd store, put
-          # there by `kind load docker-image`. IfNotPresent stops the kubelet
-          # trying to pull it from Docker Hub and ImagePullBackOff-ing.
-          pullPolicy = "IfNotPresent"
+          # `:latest` only actually tracks the newest published image if the
+          # kubelet re-pulls it every time -- IfNotPresent would keep serving
+          # whatever it first resolved `:latest` to. See this file's header.
+          pullPolicy = "Always"
         }
 
         service = {

@@ -310,12 +310,6 @@ variable "postgres_persistence_enabled" {
 # Application images
 # ---------------------------------------------------------------------------
 
-variable "image_tag" {
-  description = "Tag applied to the four locally-built service images (warehouse/<service>:<tag>)."
-  type        = string
-  default     = "local"
-}
-
 variable "deploy_services" {
   description = "Set false to stand up only the platform (cluster, Postgres, Istio, Kong) without building/deploying the four services."
   type        = bool
